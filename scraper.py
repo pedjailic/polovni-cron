@@ -153,7 +153,7 @@ def generate_html(data, updated):
   .toolbar input[type=number]{{background:#1a1f24;color:#e7e9ea;border:1px solid #2f3336;
                    padding:8px 12px;border-radius:8px;width:90px;font-size:0.9em}}
   .toolbar input[type=text]{{background:#1a1f24;color:#e7e9ea;border:1px solid #2f3336;
-                   padding:8px 12px;border-radius:8px;width:200px;font-size:0.9em;flex-shrink:1}}
+                   padding:8px 12px;border-radius:8px;min-width:200px;flex:1;font-size:0.9em}}
   .toolbar input::placeholder{{color:#555}}
   .toolbar button{{background:#1d9bf0;color:#fff;border:none;padding:8px 16px;
                     border-radius:8px;cursor:pointer;font-size:0.9em}}
@@ -189,15 +189,15 @@ def generate_html(data, updated):
 </header>
 <div class="container">
   <div class="tabs" id="tabs"></div>
-  <div class="toolbar">
-    <input type="text" id="search" placeholder="🔍 Pretraga (npr. golf, toyota...)">
-    <span class="sep">|</span>
+  <form class="toolbar" id="searchForm" onsubmit="return false">
+    <input type="text" id="search" placeholder="🔍 Pretraga na sajtu (npr. golf 7, toyota yaris...)">
     <label>€</label>
     <input type="number" id="priceMin" placeholder="od" step="500">
     <span style="color:#555">–</span>
     <input type="number" id="priceMax" placeholder="do" step="500">
-    <button id="refreshBtn">🔄 Osveži</button>
-  </div>
+    <button type="submit" id="searchBtn">🔍 Traži</button>
+    <button type="button" id="refreshBtn">🔄 Osveži</button>
+  </form>
   <div class="grid" id="grid"></div>
 </div>
 <footer>
@@ -221,21 +221,12 @@ function renderTabs() {{
 
 function renderGrid() {{
   const cat = DATA.categories[activeTab];
-  const minP = parseInt(document.getElementById('priceMin').value) || 0;
-  const maxP = parseInt(document.getElementById('priceMax').value) || Infinity;
-  const query = document.getElementById('search').value.toLowerCase().trim();
-  const filtered = cat.top.filter(r => {{
-    const p = parseInt(r.price) || 0;
-    if (p < minP || p > maxP) return false;
-    if (query && !r.title.toLowerCase().includes(query)) return false;
-    return true;
-  }});
   const el = document.getElementById('grid');
-  if (!filtered.length) {{
-    el.innerHTML = '<p class="empty">Nema rezultata za zadatu pretragu.</p>';
+  if (!cat.top.length) {{
+    el.innerHTML = '<p class="empty">Nema rezultata u poslednjih 24h.</p>';
     return;
   }}
-  el.innerHTML = filtered.map((r,i) => {{
+  el.innerHTML = cat.top.map((r,i) => {{
     const img = r.img || 'https://via.placeholder.com/400x250?text=Polovni+Automobili';
     return '<a class="card" href="'+r.url+'" target="_blank" rel="noopener">'
       +'<div class="card-img" style="background-image:url(\\\''+img+'\\\')">'
@@ -255,11 +246,18 @@ document.getElementById('tabs').addEventListener('click', e => {{
   renderGrid();
 }});
 
-document.getElementById('search').addEventListener('input', renderGrid);
-document.querySelectorAll('.toolbar input[type=number]').forEach(inp => {{
-  inp.addEventListener('change', renderGrid);
-  inp.addEventListener('keydown', e => {{ if (e.key==='Enter') renderGrid(); }});
-}});
+function doSearch() {{
+  const q = document.getElementById('search').value.trim();
+  if (!q) return;
+  const minP = document.getElementById('priceMin').value;
+  const maxP = document.getElementById('priceMax').value;
+  let url = 'https://www.polovniautomobili.com/auto-oglasi/pretraga?q=' + encodeURIComponent(q);
+  if (minP) url += '&price_from=' + minP;
+  if (maxP) url += '&price_to=' + maxP;
+  window.open(url, '_blank');
+}}
+document.getElementById('searchForm').addEventListener('submit', e => {{ e.preventDefault(); doSearch(); }});
+document.getElementById('searchBtn').addEventListener('click', doSearch);
 document.getElementById('refreshBtn').addEventListener('click', () => location.reload());
 
 renderTabs();

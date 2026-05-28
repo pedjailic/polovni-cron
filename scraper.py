@@ -148,13 +148,17 @@ def generate_html(data, updated):
   .tab.active{{background:#1d9bf0;border-color:#1d9bf0;color:#fff}}
   .badge{{background:rgba(255,255,255,.15);padding:2px 8px;border-radius:999px;
           font-size:0.8em;margin-left:6px}}
-  .filters{{display:flex;gap:12px;align-items:center;margin-bottom:20px;flex-wrap:wrap}}
-  .filters label{{color:#8b98a5;font-size:0.9em}}
-  .filters input{{background:#1a1f24;color:#e7e9ea;border:1px solid #2f3336;
+  .toolbar{{display:flex;gap:12px;align-items:center;margin-bottom:20px;flex-wrap:wrap}}
+  .toolbar label{{color:#8b98a5;font-size:0.9em}}
+  .toolbar input[type=number]{{background:#1a1f24;color:#e7e9ea;border:1px solid #2f3336;
                    padding:8px 12px;border-radius:8px;width:90px;font-size:0.9em}}
-  .filters input::placeholder{{color:#555}}
-  .filters button{{background:#1d9bf0;color:#fff;border:none;padding:8px 16px;
+  .toolbar input[type=text]{{background:#1a1f24;color:#e7e9ea;border:1px solid #2f3336;
+                   padding:8px 12px;border-radius:8px;width:200px;font-size:0.9em;flex-shrink:1}}
+  .toolbar input::placeholder{{color:#555}}
+  .toolbar button{{background:#1d9bf0;color:#fff;border:none;padding:8px 16px;
                     border-radius:8px;cursor:pointer;font-size:0.9em}}
+  .toolbar button:hover{{background:#1a8cd8}}
+  .toolbar .sep{{color:#2f3336;margin:0 4px}}
   .grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px}}
   .card{{background:#16181c;border:1px solid #2f3336;border-radius:14px;overflow:hidden;
          text-decoration:none;color:inherit;transition:transform .15s,border-color .15s;
@@ -185,12 +189,14 @@ def generate_html(data, updated):
 </header>
 <div class="container">
   <div class="tabs" id="tabs"></div>
-  <div class="filters">
-    <label>Cena:</label>
-    <input type="number" id="priceMin" placeholder="od €" step="500">
+  <div class="toolbar">
+    <input type="text" id="search" placeholder="🔍 Pretraga (npr. golf, toyota...)">
+    <span class="sep">|</span>
+    <label>€</label>
+    <input type="number" id="priceMin" placeholder="od" step="500">
     <span style="color:#555">–</span>
-    <input type="number" id="priceMax" placeholder="do €" step="500">
-    <button id="filterBtn">Filtriraj</button>
+    <input type="number" id="priceMax" placeholder="do" step="500">
+    <button id="refreshBtn">🔄 Osveži</button>
   </div>
   <div class="grid" id="grid"></div>
 </div>
@@ -217,13 +223,16 @@ function renderGrid() {{
   const cat = DATA.categories[activeTab];
   const minP = parseInt(document.getElementById('priceMin').value) || 0;
   const maxP = parseInt(document.getElementById('priceMax').value) || Infinity;
+  const query = document.getElementById('search').value.toLowerCase().trim();
   const filtered = cat.top.filter(r => {{
     const p = parseInt(r.price) || 0;
-    return p >= minP && p <= maxP;
+    if (p < minP || p > maxP) return false;
+    if (query && !r.title.toLowerCase().includes(query)) return false;
+    return true;
   }});
   const el = document.getElementById('grid');
   if (!filtered.length) {{
-    el.innerHTML = '<p class="empty">Nema rezultata za zadati filter.</p>';
+    el.innerHTML = '<p class="empty">Nema rezultata za zadatu pretragu.</p>';
     return;
   }}
   el.innerHTML = filtered.map((r,i) => {{
@@ -246,10 +255,12 @@ document.getElementById('tabs').addEventListener('click', e => {{
   renderGrid();
 }});
 
-document.getElementById('filterBtn').addEventListener('click', renderGrid);
-document.querySelectorAll('.filters input').forEach(inp => {{
+document.getElementById('search').addEventListener('input', renderGrid);
+document.querySelectorAll('.toolbar input[type=number]').forEach(inp => {{
+  inp.addEventListener('change', renderGrid);
   inp.addEventListener('keydown', e => {{ if (e.key==='Enter') renderGrid(); }});
 }});
+document.getElementById('refreshBtn').addEventListener('click', () => location.reload());
 
 renderTabs();
 renderGrid();

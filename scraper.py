@@ -5,7 +5,7 @@ import asyncio
 import aiohttp
 from concurrent.futures import ThreadPoolExecutor
 from curl_cffi import requests as cffi_requests
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 BASE = "https://www.polovniautomobili.com"
@@ -181,6 +181,7 @@ def generate_html(data, updated):
 <div class="container">
   <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:20px">
     <div class="tabs" id="tabs" style="flex:1;display:flex;gap:8px;flex-wrap:wrap"></div>
+    <span style="color:#8b98a5;font-size:0.85em">🕐 {updated}</span>
     <button class="refresh" onclick="location.reload()">🔄 Osveži</button>
   </div>
   <div class="grid" id="grid"></div>
@@ -262,7 +263,8 @@ async def main():
     tasks = [process_category(k, c, sem) for k, c in SEARCHES.items()]
     results = await asyncio.gather(*tasks)
 
-    updated = datetime.now().strftime("%d.%m.%Y %H:%M")
+    belgrade = timezone(timedelta(hours=2))
+    updated = datetime.now(belgrade).strftime("%d.%m.%Y %H:%M")
     data = {"updated": updated, "categories": {}}
     msg_parts = [f"🚗 *BG Auto Deals - {updated}*"]
 

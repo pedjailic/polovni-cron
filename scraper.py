@@ -13,31 +13,30 @@ TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID")
 
 SEARCHES = {
-    "svi": {
-        "title": "🚗 Svi BG (2k-12k€)",
+    "bg": {
+        "title": "🚗 Beograd 2-12k€",
         "url": "/auto-oglasi/poslednja24h?price_from=2000&price_to=12000"
                "&city=Beograd%7C44.820556%7C20.462222&city_distance=25&page={page}",
     },
     "suv": {
-        "title": "🛻 SUV",
+        "title": "🛻 SUV BG 3-14k€",
         "url": "/auto-oglasi/poslednja24h?price_from=3000&price_to=14000"
                "&chassis%5B0%5D=2627&chassis%5B1%5D=277"
                "&city=Beograd%7C44.820556%7C20.462222&city_distance=50&page={page}",
     },
     "toyota": {
-        "title": "🟢 Toyota",
-        "url": "/auto-oglasi/poslednja24h?price_from=2000&price_to=14000"
-               "&brand=toyota"
+        "title": "🟢 Toyota 2-14k€",
+        "url": "/auto-oglasi/poslednja24h?brand=toyota&price_from=2000&price_to=14000"
                "&city=Beograd%7C44.820556%7C20.462222&city_distance=100&page={page}",
     },
     "hibridi": {
-        "title": "⚡ Hibridi",
+        "title": "⚡ Hibridi 3-14k€",
         "url": "/auto-oglasi/poslednja24h?price_from=3000&price_to=14000"
                "&fuel%5B0%5D=3057&fuel%5B1%5D=3058"
                "&city=Beograd%7C44.820556%7C20.462222&city_distance=50&page={page}",
     },
     "jagodina": {
-        "title": "🏘️ Jagodina",
+        "title": "🏘️ Jagodina 2-12k€",
         "url": "/auto-oglasi/poslednja24h?price_from=2000&price_to=12000"
                "&city=Jagodina%7C43.977222%7C21.261111&city_distance=10&page={page}",
     },
@@ -148,17 +147,9 @@ def generate_html(data, updated):
   .tab.active{{background:#1d9bf0;border-color:#1d9bf0;color:#fff}}
   .badge{{background:rgba(255,255,255,.15);padding:2px 8px;border-radius:999px;
           font-size:0.8em;margin-left:6px}}
-  .toolbar{{display:flex;gap:12px;align-items:center;margin-bottom:20px;flex-wrap:wrap}}
-  .toolbar label{{color:#8b98a5;font-size:0.9em}}
-  .toolbar input[type=number]{{background:#1a1f24;color:#e7e9ea;border:1px solid #2f3336;
-                   padding:8px 12px;border-radius:8px;width:90px;font-size:0.9em}}
-  .toolbar input[type=text]{{background:#1a1f24;color:#e7e9ea;border:1px solid #2f3336;
-                   padding:8px 12px;border-radius:8px;min-width:200px;flex:1;font-size:0.9em}}
-  .toolbar input::placeholder{{color:#555}}
-  .toolbar button{{background:#1d9bf0;color:#fff;border:none;padding:8px 16px;
-                    border-radius:8px;cursor:pointer;font-size:0.9em}}
-  .toolbar button:hover{{background:#1a8cd8}}
-  .toolbar .sep{{color:#2f3336;margin:0 4px}}
+  .refresh{{background:none;border:1px solid #2f3336;color:#8b98a5;padding:8px 14px;
+            border-radius:999px;cursor:pointer;font-size:0.9em;transition:all .2s}}
+  .refresh:hover{{background:#22272e;color:#e7e9ea}}
   .grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px}}
   .card{{background:#16181c;border:1px solid #2f3336;border-radius:14px;overflow:hidden;
          text-decoration:none;color:inherit;transition:transform .15s,border-color .15s;
@@ -188,16 +179,10 @@ def generate_html(data, updated):
   <div class="sub">Top 10 najtraženijih polovnih po kategorijama · Ažurirano: <b>{updated}</b></div>
 </header>
 <div class="container">
-  <div class="tabs" id="tabs"></div>
-  <form class="toolbar" id="searchForm" onsubmit="return false">
-    <input type="text" id="search" placeholder="🔍 Pretraga na sajtu (npr. golf 7, toyota yaris...)">
-    <label>€</label>
-    <input type="number" id="priceMin" placeholder="od" step="500">
-    <span style="color:#555">–</span>
-    <input type="number" id="priceMax" placeholder="do" step="500">
-    <button type="submit" id="searchBtn">🔍 Traži</button>
-    <button type="button" id="refreshBtn">🔄 Osveži</button>
-  </form>
+  <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:20px">
+    <div class="tabs" id="tabs" style="flex:1;display:flex;gap:8px;flex-wrap:wrap"></div>
+    <button class="refresh" onclick="location.reload()">🔄 Osveži</button>
+  </div>
   <div class="grid" id="grid"></div>
 </div>
 <footer>
@@ -246,19 +231,6 @@ document.getElementById('tabs').addEventListener('click', e => {{
   renderGrid();
 }});
 
-function doSearch() {{
-  const q = document.getElementById('search').value.trim();
-  if (!q) return;
-  const minP = document.getElementById('priceMin').value;
-  const maxP = document.getElementById('priceMax').value;
-  let url = 'https://www.polovniautomobili.com/auto-oglasi/pretraga?q=' + encodeURIComponent(q);
-  if (minP) url += '&price_from=' + minP;
-  if (maxP) url += '&price_to=' + maxP;
-  window.open(url, '_blank');
-}}
-document.getElementById('searchForm').addEventListener('submit', e => {{ e.preventDefault(); doSearch(); }});
-document.getElementById('searchBtn').addEventListener('click', doSearch);
-document.getElementById('refreshBtn').addEventListener('click', () => location.reload());
 
 renderTabs();
 renderGrid();

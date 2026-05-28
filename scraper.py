@@ -21,7 +21,7 @@ SEARCHES = {
     "suv": {
         "title": "🛻 SUV BG 3-14k€",
         "url": "/auto-oglasi/poslednja24h?price_from=3000&price_to=14000"
-               "&chassis%5B0%5D=2627&chassis%5B1%5D=277"
+               "&chassis%5B%5D=2632"
                "&city=Beograd%7C44.820556%7C20.462222&city_distance=50&page={page}",
     },
     "toyota": {
@@ -32,7 +32,7 @@ SEARCHES = {
     "hibridi": {
         "title": "⚡ Hibridi 3-14k€",
         "url": "/auto-oglasi/poslednja24h?price_from=3000&price_to=14000"
-               "&fuel%5B0%5D=3057&fuel%5B1%5D=3058"
+               "&fuel%5B%5D=2312&fuel%5B%5D=2308"
                "&city=Beograd%7C44.820556%7C20.462222&city_distance=50&page={page}",
     },
     "jagodina": {

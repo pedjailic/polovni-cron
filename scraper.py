@@ -42,7 +42,8 @@ SEARCHES = {
     },
 }
 
-LISTING_RE = re.compile(r"/auto-oglasi/(\d+)/([\w\-]+)")
+CLASSIFIEDID_RE = re.compile(r'data-classifiedid="(\d+)"')
+SLUG_RE = re.compile(r'/auto-oglasi/(\d+)/([\w\-]+)')
 HEARTS_RE = re.compile(r'<span\s+class="classified-liked"[^>]*>\s*(\d+)\s*</span>')
 WANT_RE = re.compile(r'<span\s+class="classified-interested"[^>]*>\s*(\d+)\s*</span>')
 TITLE_RE = re.compile(r"<title>([^<]+)</title>")
@@ -63,23 +64,30 @@ async def fetch(url):
     return await loop.run_in_executor(executor, _fetch_sync, url)
 
 
-async def collect_ids(path_template, max_pages=5):
-    ids = set()
+async def collect_ids(path_template, max_pages=20):
+    ids = {}
     for page in range(1, max_pages + 1):
         try:
             html = await fetch(BASE + path_template.format(page=page))
         except Exception as e:
             print(f"  ⚠️  Page {page} failed: {e}")
             break
-        new = LISTING_RE.findall(html)
-        if not new:
+        new_ids = CLASSIFIEDID_RE.findall(html)
+        if not new_ids:
             break
         before = len(ids)
-        for nid, slug in new:
-            ids.add(f"/auto-oglasi/{nid}/{slug}")
+        for nid in new_ids:
+            if nid not in ids:
+                slug_match = SLUG_RE.search(html[html.find(f'data-classifiedid="{nid}"'):])
+                slug = slug_match.group(2) if slug_match else nid
+                ids[nid] = f"/auto-oglasi/{nid}/{slug}"
+        print(f"    p{page}: +{len(ids)-before} ({len(ids)} total)")
         if len(ids) == before:
             break
-    return list(ids)
+        has_next = f'page={page+1}' in html
+        if not has_next:
+            break
+    return list(ids.values())
 
 
 async def get_listing(path, sem):

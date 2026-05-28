@@ -36,13 +36,18 @@ SEARCHES = {
                "&fuel%5B0%5D=3057&fuel%5B1%5D=3058"
                "&city=Beograd%7C44.820556%7C20.462222&city_distance=50&page={page}",
     },
+    "jagodina": {
+        "title": "🏘️ Jagodina",
+        "url": "/auto-oglasi/poslednja24h?price_from=2000&price_to=12000"
+               "&city=Jagodina%7C43.977222%7C21.261111&city_distance=10&page={page}",
+    },
 }
 
 LISTING_RE = re.compile(r"/auto-oglasi/(\d+)/([\w\-]+)")
 HEARTS_RE = re.compile(r'<span\s+class="classified-liked"[^>]*>\s*(\d+)\s*</span>')
 WANT_RE = re.compile(r'<span\s+class="classified-interested"[^>]*>\s*(\d+)\s*</span>')
 TITLE_RE = re.compile(r"<title>([^<]+)</title>")
-PRICE_RE = re.compile(r'data-price="?(\d+)')
+PRICE_RE = re.compile(r'"price"\s*:\s*"(\d+)"')
 IMG_RE = re.compile(r'<meta\s+property="og:image"\s+content="([^"]+)"')
 
 executor = ThreadPoolExecutor(max_workers=10)
@@ -109,7 +114,7 @@ async def process_category(key, cat, sem):
     valid = [r for r in results if r]
     valid.sort(key=lambda r: (r["want"], r["hearts"]), reverse=True)
     print(f"   ✅ {len(valid)} valid, top5 ready")
-    return key, cat["title"], valid[:5], len(ids)
+    return key, cat["title"], valid[:10], len(ids)
 
 
 def escape(s):
@@ -120,7 +125,7 @@ def generate_html(data, updated):
     cards_html_by_cat = {}
     for key, info in data["categories"].items():
         cards = []
-        for i, r in enumerate(info["top5"], 1):
+        for i, r in enumerate(info["top"], 1):
             img = r["img"] or "https://via.placeholder.com/400x250?text=Polovni+Automobili"
             cards.append(f"""
             <a class="card" href="{r['url']}" target="_blank" rel="noopener">
@@ -156,8 +161,8 @@ def generate_html(data, updated):
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>BG Auto Deals - Top 5 dnevno</title>
-<meta property="og:title" content="BG Auto Deals - Top 5 dnevno">
+<title>BG Auto Deals - Top 10 dnevno</title>
+<meta property="og:title" content="BG Auto Deals - Top 10 dnevno">
 <meta property="og:description" content="Najtraženiji polovni auti u Beogradu - automatski ažurirano svaki dan">
 <style>
   *{{box-sizing:border-box}}
@@ -202,7 +207,7 @@ def generate_html(data, updated):
 <body>
 <header>
   <h1>🚗 BG Auto Deals</h1>
-  <div class="sub">Top 5 najtraženijih polovnih po kategorijama · Ažurirano: <b>{updated}</b></div>
+  <div class="sub">Top 10 najtraženijih polovnih po kategorijama · Ažurirano: <b>{updated}</b></div>
 </header>
 <div class="container">
   <div class="tabs">{tabs}</div>
@@ -255,7 +260,7 @@ async def main():
     msg_parts = [f"🚗 *BG Auto Deals - {updated}*"]
 
     for key, title, top5, total in results:
-        data["categories"][key] = {"title": title, "top5": top5, "total": total}
+        data["categories"][key] = {"title": title, "top": top5, "total": total}
         msg_parts.append(f"\n*{title}* _({total} oglasa)_")
         for i, r in enumerate(top5, 1):
             msg_parts.append(

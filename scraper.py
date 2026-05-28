@@ -50,13 +50,21 @@ TITLE_RE = re.compile(r"<title>([^<]+)</title>")
 PRICE_RE = re.compile(r'"price"\s*:\s*"(\d+)"')
 IMG_RE = re.compile(r'<meta\s+property="og:image"\s+content="([^"]+)"')
 
-executor = ThreadPoolExecutor(max_workers=10)
+executor = ThreadPoolExecutor(max_workers=3)
 
 
 def _fetch_sync(url):
-    r = cffi_requests.get(url, impersonate="chrome", timeout=30)
-    r.raise_for_status()
-    return r.text
+    import time
+    for attempt in range(3):
+        try:
+            r = cffi_requests.get(url, impersonate="chrome", timeout=30)
+            r.raise_for_status()
+            return r.text
+        except Exception as e:
+            if '429' in str(e) and attempt < 2:
+                time.sleep(2 ** attempt + 1)
+                continue
+            raise
 
 
 async def fetch(url):
@@ -64,7 +72,7 @@ async def fetch(url):
     return await loop.run_in_executor(executor, _fetch_sync, url)
 
 
-async def collect_ids(path_template, max_pages=20):
+async def collect_ids(path_template, max_pages=5):
     ids = {}
     for page in range(1, max_pages + 1):
         try:
@@ -267,7 +275,7 @@ async def send_telegram(msg):
 
 
 async def main():
-    sem = asyncio.Semaphore(10)
+    sem = asyncio.Semaphore(3)
     tasks = [process_category(k, c, sem) for k, c in SEARCHES.items()]
     results = await asyncio.gather(*tasks)
 

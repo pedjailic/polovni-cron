@@ -122,39 +122,7 @@ def escape(s):
 
 
 def generate_html(data, updated):
-    cards_html_by_cat = {}
-    for key, info in data["categories"].items():
-        cards = []
-        for i, r in enumerate(info["top"], 1):
-            img = r["img"] or "https://via.placeholder.com/400x250?text=Polovni+Automobili"
-            cards.append(f"""
-            <a class="card" href="{r['url']}" target="_blank" rel="noopener">
-              <div class="card-img" style="background-image:url('{img}')">
-                <span class="rank">#{i}</span>
-              </div>
-              <div class="card-body">
-                <div class="title">{escape(r['title'])}</div>
-                <div class="meta">
-                  <span class="price">{r['price']}€</span>
-                  <span class="stat">❤️ {r['hearts']}</span>
-                  <span class="stat want">🛒 {r['want']}</span>
-                </div>
-              </div>
-            </a>""")
-        if not cards:
-            cards = ['<p class="empty">Nema rezultata u poslednjih 24h.</p>']
-        cards_html_by_cat[key] = "\n".join(cards)
-
-    tabs = "".join(
-        f'<button class="tab{" active" if i==0 else ""}" data-tab="{k}">{escape(info["title"])} '
-        f'<span class="badge">{info["total"]}</span></button>'
-        for i, (k, info) in enumerate(data["categories"].items())
-    )
-    panels = "".join(
-        f'<div class="panel{" active" if i==0 else ""}" data-panel="{k}">'
-        f'<div class="grid">{cards_html_by_cat[k]}</div></div>'
-        for i, (k, info) in enumerate(data["categories"].items())
-    )
+    data_json = json.dumps(data, ensure_ascii=False)
 
     return f"""<!doctype html>
 <html lang="sr">
@@ -180,7 +148,13 @@ def generate_html(data, updated):
   .tab.active{{background:#1d9bf0;border-color:#1d9bf0;color:#fff}}
   .badge{{background:rgba(255,255,255,.15);padding:2px 8px;border-radius:999px;
           font-size:0.8em;margin-left:6px}}
-  .panel{{display:none}}.panel.active{{display:block}}
+  .filters{{display:flex;gap:12px;align-items:center;margin-bottom:20px;flex-wrap:wrap}}
+  .filters label{{color:#8b98a5;font-size:0.9em}}
+  .filters input{{background:#1a1f24;color:#e7e9ea;border:1px solid #2f3336;
+                   padding:8px 12px;border-radius:8px;width:90px;font-size:0.9em}}
+  .filters input::placeholder{{color:#555}}
+  .filters button{{background:#1d9bf0;color:#fff;border:none;padding:8px 16px;
+                    border-radius:8px;cursor:pointer;font-size:0.9em}}
   .grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px}}
   .card{{background:#16181c;border:1px solid #2f3336;border-radius:14px;overflow:hidden;
          text-decoration:none;color:inherit;transition:transform .15s,border-color .15s;
@@ -210,8 +184,15 @@ def generate_html(data, updated):
   <div class="sub">Top 10 najtraženijih polovnih po kategorijama · Ažurirano: <b>{updated}</b></div>
 </header>
 <div class="container">
-  <div class="tabs">{tabs}</div>
-  {panels}
+  <div class="tabs" id="tabs"></div>
+  <div class="filters">
+    <label>Cena:</label>
+    <input type="number" id="priceMin" placeholder="od €" step="500">
+    <span style="color:#555">–</span>
+    <input type="number" id="priceMax" placeholder="do €" step="500">
+    <button id="filterBtn">Filtriraj</button>
+  </div>
+  <div class="grid" id="grid"></div>
 </div>
 <footer>
   Podaci sa <a href="https://www.polovniautomobili.com" target="_blank">polovniautomobili.com</a> ·
@@ -219,14 +200,59 @@ def generate_html(data, updated):
   <a href="data.json">data.json</a>
 </footer>
 <script>
-  document.querySelectorAll('.tab').forEach(t=>{{
-    t.addEventListener('click',()=>{{
-      document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
-      document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));
-      t.classList.add('active');
-      document.querySelector(`.panel[data-panel="${{t.dataset.tab}}"]`).classList.add('active');
-    }});
+const DATA = {data_json};
+let activeTab = Object.keys(DATA.categories)[0];
+
+function esc(s) {{ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }}
+
+function renderTabs() {{
+  const el = document.getElementById('tabs');
+  el.innerHTML = Object.entries(DATA.categories).map(([k,v]) =>
+    '<button class="tab'+(k===activeTab?' active':'')+'" data-tab="'+k+'">'
+    +esc(v.title)+' <span class="badge">'+v.total+'</span></button>'
+  ).join('');
+}}
+
+function renderGrid() {{
+  const cat = DATA.categories[activeTab];
+  const minP = parseInt(document.getElementById('priceMin').value) || 0;
+  const maxP = parseInt(document.getElementById('priceMax').value) || Infinity;
+  const filtered = cat.top.filter(r => {{
+    const p = parseInt(r.price) || 0;
+    return p >= minP && p <= maxP;
   }});
+  const el = document.getElementById('grid');
+  if (!filtered.length) {{
+    el.innerHTML = '<p class="empty">Nema rezultata za zadati filter.</p>';
+    return;
+  }}
+  el.innerHTML = filtered.map((r,i) => {{
+    const img = r.img || 'https://via.placeholder.com/400x250?text=Polovni+Automobili';
+    return '<a class="card" href="'+r.url+'" target="_blank" rel="noopener">'
+      +'<div class="card-img" style="background-image:url(\\\''+img+'\\\')">'
+      +'<span class="rank">#'+(i+1)+'</span></div>'
+      +'<div class="card-body"><div class="title">'+esc(r.title)+'</div>'
+      +'<div class="meta"><span class="price">'+r.price+'€</span>'
+      +'<span class="stat">❤️ '+r.hearts+'</span>'
+      +'<span class="stat want">🛒 '+r.want+'</span></div></div></a>';
+  }}).join('');
+}}
+
+document.getElementById('tabs').addEventListener('click', e => {{
+  const btn = e.target.closest('.tab');
+  if (!btn) return;
+  activeTab = btn.dataset.tab;
+  renderTabs();
+  renderGrid();
+}});
+
+document.getElementById('filterBtn').addEventListener('click', renderGrid);
+document.querySelectorAll('.filters input').forEach(inp => {{
+  inp.addEventListener('keydown', e => {{ if (e.key==='Enter') renderGrid(); }});
+}});
+
+renderTabs();
+renderGrid();
 </script>
 </body>
 </html>"""

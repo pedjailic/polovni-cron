@@ -3,17 +3,14 @@ import re
 import json
 import asyncio
 import aiohttp
+from concurrent.futures import ThreadPoolExecutor
+from curl_cffi import requests as cffi_requests
 from datetime import datetime
 from pathlib import Path
 
 BASE = "https://www.polovniautomobili.com"
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID")
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                  "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-}
 
 SEARCHES = {
     "svi": {
@@ -29,7 +26,8 @@ SEARCHES = {
     },
     "toyota": {
         "title": "🟢 Toyota",
-        "url": "/auto-oglasi/poslednja24h?brand=toyota&price_from=2000&price_to=14000"
+        "url": "/auto-oglasi/poslednja24h?price_from=2000&price_to=14000"
+               "&brand=toyota"
                "&city=Beograd%7C44.820556%7C20.462222&city_distance=100&page={page}",
     },
     "hibridi": {
@@ -47,18 +45,27 @@ TITLE_RE = re.compile(r"<title>([^<]+)</title>")
 PRICE_RE = re.compile(r'data-price="?(\d+)')
 IMG_RE = re.compile(r'<meta\s+property="og:image"\s+content="([^"]+)"')
 
-
-async def fetch(session, url):
-    async with session.get(url, headers=HEADERS, timeout=30) as r:
-        return await r.text()
+executor = ThreadPoolExecutor(max_workers=10)
 
 
-async def collect_ids(session, path_template, max_pages=5):
+def _fetch_sync(url):
+    r = cffi_requests.get(url, impersonate="chrome", timeout=30)
+    r.raise_for_status()
+    return r.text
+
+
+async def fetch(url):
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(executor, _fetch_sync, url)
+
+
+async def collect_ids(path_template, max_pages=5):
     ids = set()
     for page in range(1, max_pages + 1):
         try:
-            html = await fetch(session, BASE + path_template.format(page=page))
-        except Exception:
+            html = await fetch(BASE + path_template.format(page=page))
+        except Exception as e:
+            print(f"  ⚠️  Page {page} failed: {e}")
             break
         new = LISTING_RE.findall(html)
         if not new:
@@ -71,37 +78,37 @@ async def collect_ids(session, path_template, max_pages=5):
     return list(ids)
 
 
-async def get_listing(session, path):
-    try:
-        html = await fetch(session, BASE + path)
-        h = HEARTS_RE.search(html)
-        w = WANT_RE.search(html)
-        t = TITLE_RE.search(html)
-        p = PRICE_RE.search(html)
-        img = IMG_RE.search(html)
-        return {
-            "path": path,
-            "url": BASE + path,
-            "hearts": int(h.group(1)) if h else 0,
-            "want": int(w.group(1)) if w else 0,
-            "title": (t.group(1) if t else "").strip().replace("\n", " ")[:90],
-            "price": p.group(1) if p else "?",
-            "img": img.group(1) if img else "",
-        }
-    except Exception:
-        return None
+async def get_listing(path, sem):
+    async with sem:
+        try:
+            html = await fetch(BASE + path)
+            h = HEARTS_RE.search(html)
+            w = WANT_RE.search(html)
+            t = TITLE_RE.search(html)
+            p = PRICE_RE.search(html)
+            img = IMG_RE.search(html)
+            return {
+                "path": path,
+                "url": BASE + path,
+                "hearts": int(h.group(1)) if h else 0,
+                "want": int(w.group(1)) if w else 0,
+                "title": (t.group(1) if t else "").strip().replace("\n", " ")[:90],
+                "price": p.group(1) if p else "?",
+                "img": img.group(1) if img else "",
+            }
+        except Exception as e:
+            print(f"  ⚠️  Listing failed {path}: {e}")
+            return None
 
 
-async def process_category(session, key, cat, sem):
-    ids = await collect_ids(session, cat["url"])
-
-    async def fetch_one(p):
-        async with sem:
-            return await get_listing(session, p)
-
-    results = await asyncio.gather(*[fetch_one(p) for p in ids])
+async def process_category(key, cat, sem):
+    print(f"📂 {cat['title']}...")
+    ids = await collect_ids(cat["url"])
+    print(f"   Found {len(ids)} listings, fetching details...")
+    results = await asyncio.gather(*[get_listing(p, sem) for p in ids])
     valid = [r for r in results if r]
     valid.sort(key=lambda r: (r["want"], r["hearts"]), reverse=True)
+    print(f"   ✅ {len(valid)} valid, top5 ready")
     return key, cat["title"], valid[:5], len(ids)
 
 
@@ -220,48 +227,48 @@ def generate_html(data, updated):
 </html>"""
 
 
-async def send_telegram(session, msg):
+async def send_telegram(msg):
     if not (TG_TOKEN and TG_CHAT):
         print("⚠️  Telegram nije konfigurisan, preskačem slanje")
         return
-    while msg:
-        chunk, msg = msg[:3800], msg[3800:]
-        try:
-            async with session.post(
-                f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-                json={"chat_id": TG_CHAT, "text": chunk, "parse_mode": "Markdown",
-                      "disable_web_page_preview": True}
-            ) as r:
-                print(await r.text())
-        except Exception as e:
-            print(f"Telegram error: {e}")
+    async with aiohttp.ClientSession() as session:
+        while msg:
+            chunk, msg = msg[:3800], msg[3800:]
+            try:
+                async with session.post(
+                    f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+                    json={"chat_id": TG_CHAT, "text": chunk, "parse_mode": "Markdown",
+                          "disable_web_page_preview": True}
+                ) as r:
+                    print(await r.text())
+            except Exception as e:
+                print(f"Telegram error: {e}")
 
 
 async def main():
     sem = asyncio.Semaphore(10)
-    async with aiohttp.ClientSession() as session:
-        tasks = [process_category(session, k, c, sem) for k, c in SEARCHES.items()]
-        results = await asyncio.gather(*tasks)
+    tasks = [process_category(k, c, sem) for k, c in SEARCHES.items()]
+    results = await asyncio.gather(*tasks)
 
-        updated = datetime.now().strftime("%d.%m.%Y %H:%M")
-        data = {"updated": updated, "categories": {}}
-        msg_parts = [f"🚗 *BG Auto Deals - {updated}*"]
+    updated = datetime.now().strftime("%d.%m.%Y %H:%M")
+    data = {"updated": updated, "categories": {}}
+    msg_parts = [f"🚗 *BG Auto Deals - {updated}*"]
 
-        for key, title, top5, total in results:
-            data["categories"][key] = {"title": title, "top5": top5, "total": total}
-            msg_parts.append(f"\n*{title}* _({total} oglasa)_")
-            for i, r in enumerate(top5, 1):
-                msg_parts.append(
-                    f"{i}. ❤️{r['hearts']} 🛒{r['want']} 💶{r['price']}€\n"
-                    f"   {r['title']}\n   {r['url']}"
-                )
+    for key, title, top5, total in results:
+        data["categories"][key] = {"title": title, "top5": top5, "total": total}
+        msg_parts.append(f"\n*{title}* _({total} oglasa)_")
+        for i, r in enumerate(top5, 1):
+            msg_parts.append(
+                f"{i}. ❤️{r['hearts']} 🛒{r['want']} 💶{r['price']}€\n"
+                f"   {r['title']}\n   {r['url']}"
+            )
 
-        Path("public").mkdir(exist_ok=True)
-        Path("public/data.json").write_text(json.dumps(data, ensure_ascii=False, indent=2))
-        Path("public/index.html").write_text(generate_html(data, updated))
-        print("✅ HTML generated in public/")
+    Path("public").mkdir(exist_ok=True)
+    Path("public/data.json").write_text(json.dumps(data, ensure_ascii=False, indent=2))
+    Path("public/index.html").write_text(generate_html(data, updated))
+    print("✅ HTML generated in public/")
 
-        await send_telegram(session, "\n".join(msg_parts))
+    await send_telegram("\n".join(msg_parts))
 
 
 if __name__ == "__main__":

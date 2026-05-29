@@ -2,7 +2,7 @@ name: Hourly Scrape & Deploy
 
 on:
   schedule:
-    - cron: '0 5-21/3 * * *'
+    - cron: '0 5-21/5 * * *'
   workflow_dispatch:
 
 permissions:

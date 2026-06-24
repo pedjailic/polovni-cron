@@ -1,9 +1,9 @@
 import os
 import re
 import json
-import asyncio
+import time
 import aiohttp
-from concurrent.futures import ThreadPoolExecutor
+import asyncio
 from curl_cffi import requests as cffi_requests
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -15,125 +15,123 @@ TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID")
 SEARCHES = {
     "bg": {
         "title": "🚗 Beograd 2-12k€",
-        "url": "/auto-oglasi/poslednja24h?price_from=2000&price_to=12000"
-               "&city=Beograd%7C44.820556%7C20.462222&city_distance=25&page={page}",
+        "params": "priceFrom=2000&priceTo=12000&cityId=308&cityDistance=25&sort=basic",
     },
     "suv": {
         "title": "🛻 SUV BG 3-14k€",
-        "url": "/auto-oglasi/poslednja24h?price_from=3000&price_to=14000"
-               "&chassis%5B%5D=2632"
-               "&city=Beograd%7C44.820556%7C20.462222&city_distance=50&page={page}",
+        "params": "priceFrom=3000&priceTo=14000&chassis%5B%5D=suv"
+                  "&cityId=308&cityDistance=50&sort=basic",
     },
     "toyota": {
         "title": "🟢 Toyota 2-14k€",
-        "url": "/auto-oglasi/poslednja24h?brand=toyota&price_from=2000&price_to=14000"
-               "&city=Beograd%7C44.820556%7C20.462222&city_distance=100&page={page}",
+        "params": "brand=Toyota&priceFrom=2000&priceTo=14000"
+                  "&cityId=308&cityDistance=100&sort=basic",
     },
     "hibridi": {
         "title": "⚡ Hibridi 3-14k€",
-        "url": "/auto-oglasi/poslednja24h?price_from=3000&price_to=14000"
-               "&fuel%5B%5D=2312&fuel%5B%5D=2308"
-               "&city=Beograd%7C44.820556%7C20.462222&city_distance=50&page={page}",
+        "params": "priceFrom=3000&priceTo=14000&fuel=electric&fuel=hybrid"
+                  "&cityId=308&cityDistance=50&sort=basic",
     },
     "jagodina": {
         "title": "🏘️ Jagodina 2-12k€",
-        "url": "/auto-oglasi/poslednja24h?price_from=2000&price_to=12000"
-               "&city=Jagodina%7C43.977222%7C21.261111&city_distance=10&page={page}",
+        "params": "priceFrom=2000&priceTo=12000&city=Jagodina&cityDistance=10&sort=basic",
     },
 }
 
-CLASSIFIEDID_RE = re.compile(r'data-classifiedid="(\d+)"')
-SLUG_RE = re.compile(r'/auto-oglasi/(\d+)/([\w\-]+)')
-HEARTS_RE = re.compile(r'<span\s+class="classified-liked"[^>]*>\s*(\d+)\s*</span>')
-WANT_RE = re.compile(r'<span\s+class="classified-interested"[^>]*>\s*(\d+)\s*</span>')
-TITLE_RE = re.compile(r"<title>([^<]+)</title>")
-PRICE_RE = re.compile(r'"price"\s*:\s*"(\d+)"')
-IMG_RE = re.compile(r'<meta\s+property="og:image"\s+content="([^"]+)"')
+NEXTDATA_RE = re.compile(r'<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.DOTALL)
 
-executor = ThreadPoolExecutor(max_workers=3)
+session = cffi_requests.Session(impersonate="chrome")
 
 
-def _fetch_sync(url):
-    import time
+def get_build_id():
+    html = fetch("https://www.polovniautomobili.com/auto-oglasi/pretraga?sort=basic")
+    m = re.search(r'"buildId":"([^"]+)"', html)
+    if not m:
+        raise RuntimeError("Could not find Next.js buildId")
+    return m.group(1)
+
+
+def fetch(url):
     for attempt in range(3):
         try:
-            r = cffi_requests.get(url, impersonate="chrome", timeout=30)
+            r = session.get(url, timeout=30)
             r.raise_for_status()
             return r.text
         except Exception as e:
-            if '429' in str(e) and attempt < 2:
+            if ('429' in str(e) or '503' in str(e)) and attempt < 2:
                 time.sleep(2 ** attempt + 1)
                 continue
             raise
 
 
-async def fetch(url):
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(executor, _fetch_sync, url)
+def fetch_search_page(build_id, params, page):
+    url = f"{BASE}/_next/data/{build_id}/auto-oglasi/pretraga.json?{params}&page={page}"
+    text = fetch(url)
+    data = json.loads(text)
+    sr = data.get("pageProps", {}).get("searchResults", {})
+    page_count = sr.get("pageCount", 0)
+    total_items = sr.get("totalItems", 0)
+    results = []
+    for item in sr.get("results", []):
+        price = item.get("price")
+        if not price:
+            continue
+        brand_slug = item.get("brand", "").lower().replace(" ", "-")
+        model_slug = item.get("title", "").lower().replace(" ", "-")
+        results.append({
+            "id": item.get("id", ""),
+            "url": f"{BASE}/auto-oglasi/{item['id']}/{brand_slug}-{model_slug}",
+            "title": item.get("title", ""),
+            "price": price,
+            "year": item.get("year", 0),
+            "mileage": item.get("mileage", 0),
+            "fuel": item.get("fuel", ""),
+            "hp": item.get("horsePower", 0),
+            "city": item.get("city", ""),
+            "img": item.get("imageMain", ""),
+        })
+    return results, page_count, total_items
 
 
-async def collect_ids(path_template, max_pages=5):
-    ids = {}
+def value_score(listing):
+    current_year = 2026
+    age = max(1, current_year - listing["year"])
+    km = max(1, listing["mileage"])
+    price = listing["price"]
+    hp = max(1, listing["hp"])
+    return (hp / price) * (1 / age) * (100000 / km)
+
+
+def collect_category(key, cat, build_id, max_pages=3):
+    print(f"📂 {cat['title']}...")
+    all_listings = {}
+
     for page in range(1, max_pages + 1):
         try:
-            html = await fetch(BASE + path_template.format(page=page))
+            listings, page_count, total_items = fetch_search_page(build_id, cat["params"], page)
         except Exception as e:
             print(f"  ⚠️  Page {page} failed: {e}")
             break
-        new_ids = CLASSIFIEDID_RE.findall(html)
-        if not new_ids:
+
+        if not listings:
             break
-        before = len(ids)
-        for nid in new_ids:
-            if nid not in ids:
-                slug_match = SLUG_RE.search(html[html.find(f'data-classifiedid="{nid}"'):])
-                slug = slug_match.group(2) if slug_match else nid
-                ids[nid] = f"/auto-oglasi/{nid}/{slug}"
-        print(f"    p{page}: +{len(ids)-before} ({len(ids)} total)")
-        if len(ids) == before:
+
+        before = len(all_listings)
+        for lst in listings:
+            if lst["id"] not in all_listings:
+                all_listings[lst["id"]] = lst
+
+        print(f"    p{page}: +{len(all_listings) - before} ({len(all_listings)} total)")
+
+        if page >= page_count:
             break
-        has_next = f'page={page+1}' in html
-        if not has_next:
-            break
-    return list(ids.values())
+        time.sleep(1)
 
-
-async def get_listing(path, sem):
-    async with sem:
-        try:
-            html = await fetch(BASE + path)
-            h = HEARTS_RE.search(html)
-            w = WANT_RE.search(html)
-            t = TITLE_RE.search(html)
-            p = PRICE_RE.search(html)
-            img = IMG_RE.search(html)
-            return {
-                "path": path,
-                "url": BASE + path,
-                "hearts": int(h.group(1)) if h else 0,
-                "want": int(w.group(1)) if w else 0,
-                "title": (t.group(1) if t else "").strip().replace("\n", " ")[:90],
-                "price": p.group(1) if p else "?",
-                "img": img.group(1) if img else "",
-            }
-        except Exception as e:
-            print(f"  ⚠️  Listing failed {path}: {e}")
-            return None
-
-
-async def process_category(key, cat, sem):
-    print(f"📂 {cat['title']}...")
-    ids = await collect_ids(cat["url"])
-    print(f"   Found {len(ids)} listings, fetching details...")
-    results = await asyncio.gather(*[get_listing(p, sem) for p in ids])
-    valid = [r for r in results if r]
-    valid.sort(key=lambda r: (r["want"], r["hearts"]), reverse=True)
-    print(f"   ✅ {len(valid)} valid, top5 ready")
-    return key, cat["title"], valid[:10], len(ids)
-
-
-def escape(s):
-    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    valid = list(all_listings.values())
+    valid.sort(key=value_score, reverse=True)
+    top = valid[:10]
+    print(f"   ✅ {len(valid)} valid, top10 ready")
+    return key, cat["title"], top, len(valid)
 
 
 def generate_html(data, updated):
@@ -144,9 +142,9 @@ def generate_html(data, updated):
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>BG Auto Deals - Top 10 dnevno</title>
-<meta property="og:title" content="BG Auto Deals - Top 10 dnevno">
-<meta property="og:description" content="Najtraženiji polovni auti u Beogradu - automatski ažurirano svaki dan">
+<title>BG Auto Deals - Top 10</title>
+<meta property="og:title" content="BG Auto Deals - Top 10">
+<meta property="og:description" content="Najbolji polovni auti po kategorijama - automatski ažurirano">
 <style>
   *{{box-sizing:border-box}}
   body{{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
@@ -166,7 +164,7 @@ def generate_html(data, updated):
   .refresh{{background:none;border:1px solid #2f3336;color:#8b98a5;padding:8px 14px;
             border-radius:999px;cursor:pointer;font-size:0.9em;transition:all .2s}}
   .refresh:hover{{background:#22272e;color:#e7e9ea}}
-  .grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px}}
+  .grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}}
   .card{{background:#16181c;border:1px solid #2f3336;border-radius:14px;overflow:hidden;
          text-decoration:none;color:inherit;transition:transform .15s,border-color .15s;
          display:flex;flex-direction:column}}
@@ -179,10 +177,9 @@ def generate_html(data, updated):
   .title{{font-weight:600;font-size:0.95em;margin-bottom:8px;
           display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
           overflow:hidden}}
-  .meta{{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:0.9em}}
+  .meta{{display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:0.85em}}
   .price{{background:#00ba7c;color:#fff;padding:3px 10px;border-radius:6px;font-weight:700}}
-  .stat{{color:#8b98a5}}
-  .stat.want{{color:#f4b400}}
+  .stat{{color:#8b98a5;background:#1a1f24;padding:2px 8px;border-radius:6px}}
   .empty{{color:#8b98a5;text-align:center;padding:40px}}
   footer{{text-align:center;color:#8b98a5;padding:24px;font-size:0.85em;
           border-top:1px solid #2f3336;margin-top:40px}}
@@ -192,7 +189,7 @@ def generate_html(data, updated):
 <body>
 <header>
   <h1>🚗 BG Auto Deals</h1>
-  <div class="sub">Top 10 najtraženijih polovnih po kategorijama · Ažurirano: <b>{updated}</b></div>
+  <div class="sub">Top 10 po vrednosti (KS/€/god/km) · Ažurirano: <b>{updated}</b></div>
 </header>
 <div class="container">
   <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:20px">
@@ -204,7 +201,7 @@ def generate_html(data, updated):
 </div>
 <footer>
   Podaci sa <a href="https://www.polovniautomobili.com" target="_blank">polovniautomobili.com</a> ·
-  Sortirano po 🛒 želim da kupim + ❤️ srca ·
+  Rangirano po vrednosti (KS/€ × novije × manja km) ·
   <a href="data.json">data.json</a>
 </footer>
 <script>
@@ -212,6 +209,8 @@ const DATA = {data_json};
 let activeTab = Object.keys(DATA.categories)[0];
 
 function esc(s) {{ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }}
+
+function fmtKm(km) {{ return km ? km.toLocaleString('sr') + ' km' : ''; }}
 
 function renderTabs() {{
   const el = document.getElementById('tabs');
@@ -225,18 +224,22 @@ function renderGrid() {{
   const cat = DATA.categories[activeTab];
   const el = document.getElementById('grid');
   if (!cat.top.length) {{
-    el.innerHTML = '<p class="empty">Nema rezultata u poslednjih 24h.</p>';
+    el.innerHTML = '<p class="empty">Nema rezultata za ovu kategoriju.</p>';
     return;
   }}
   el.innerHTML = cat.top.map((r,i) => {{
-    const img = r.img || 'https://via.placeholder.com/400x250?text=Polovni+Automobili';
+    const img = r.img || '';
+    const imgStyle = img ? "background-image:url('"+img+"')" : "";
     return '<a class="card" href="'+r.url+'" target="_blank" rel="noopener">'
-      +'<div class="card-img" style="background-image:url(\\\''+img+'\\\')">'
+      +'<div class="card-img" style="'+imgStyle+'">'
       +'<span class="rank">#'+(i+1)+'</span></div>'
       +'<div class="card-body"><div class="title">'+esc(r.title)+'</div>'
       +'<div class="meta"><span class="price">'+r.price+'€</span>'
-      +'<span class="stat">❤️ '+r.hearts+'</span>'
-      +'<span class="stat want">🛒 '+r.want+'</span></div></div></a>';
+      +(r.year ? '<span class="stat">📅 '+r.year+'</span>' : '')
+      +(r.mileage ? '<span class="stat">🛣️ '+fmtKm(r.mileage)+'</span>' : '')
+      +(r.hp ? '<span class="stat">🐴 '+r.hp+' KS</span>' : '')
+      +(r.fuel ? '<span class="stat">⛽ '+esc(r.fuel)+'</span>' : '')
+      +'</div></div></a>';
   }}).join('');
 }}
 
@@ -247,7 +250,6 @@ document.getElementById('tabs').addEventListener('click', e => {{
   renderTabs();
   renderGrid();
 }});
-
 
 renderTabs();
 renderGrid();
@@ -275,28 +277,39 @@ async def send_telegram(msg):
 
 
 async def main():
-    sem = asyncio.Semaphore(3)
-    tasks = [process_category(k, c, sem) for k, c in SEARCHES.items()]
-    results = await asyncio.gather(*tasks)
+    print("🔍 Getting buildId...")
+    build_id = get_build_id()
+    print(f"   buildId: {build_id}")
+
+    results = []
+    for key, cat in SEARCHES.items():
+        result = collect_category(key, cat, build_id)
+        results.append(result)
+        time.sleep(2)
+
+    total_listings = sum(r[3] for r in results)
+    if total_listings == 0:
+        print("⚠️  0 rezultata ukupno — sajt možda u remontu, preskačem deploy")
+        return
 
     belgrade = timezone(timedelta(hours=2))
     updated = datetime.now(belgrade).strftime("%d.%m.%Y %H:%M")
     data = {"updated": updated, "categories": {}}
     msg_parts = [f"🚗 *BG Auto Deals - {updated}*"]
 
-    for key, title, top5, total in results:
-        data["categories"][key] = {"title": title, "top": top5, "total": total}
+    for key, title, top10, total in results:
+        data["categories"][key] = {"title": title, "top": top10, "total": total}
         msg_parts.append(f"\n*{title}* _({total} oglasa)_")
-        for i, r in enumerate(top5, 1):
+        for i, r in enumerate(top10, 1):
             msg_parts.append(
-                f"{i}. ❤️{r['hearts']} 🛒{r['want']} 💶{r['price']}€\n"
+                f"{i}. 💶{r['price']}€ 📅{r['year']} 🛣️{r['mileage']}km\n"
                 f"   {r['title']}\n   {r['url']}"
             )
 
     Path("public").mkdir(exist_ok=True)
     Path("public/data.json").write_text(json.dumps(data, ensure_ascii=False, indent=2))
     Path("public/index.html").write_text(generate_html(data, updated))
-    print("✅ HTML generated in public/")
+    print(f"✅ HTML generated in public/ ({total_listings} total listings)")
 
     await send_telegram("\n".join(msg_parts))
 

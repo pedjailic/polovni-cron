@@ -9,6 +9,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 BASE = "https://www.polovniautomobili.com"
+CORE_API = "https://core.polovniautomobili.com"
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID")
 
@@ -42,6 +43,11 @@ NEXTDATA_RE = re.compile(r'<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)</script>', 
 
 session = cffi_requests.Session(impersonate="chrome")
 
+ENGAGEMENT_HEADERS = {
+    "Referer": "https://www.polovniautomobili.com/",
+    "Accept": "application/json",
+}
+
 
 def get_build_id():
     html = fetch("https://www.polovniautomobili.com/auto-oglasi/pretraga?sort=basic")
@@ -62,6 +68,20 @@ def fetch(url):
                 time.sleep(2 ** attempt + 1)
                 continue
             raise
+
+
+def fetch_engagement(ad_id):
+    url = f"{CORE_API}/api/v1/classifieds/{ad_id}/additional/info"
+    for attempt in range(2):
+        try:
+            r = session.get(url, headers=ENGAGEMENT_HEADERS, timeout=10)
+            if r.status_code == 200:
+                data = r.json()
+                return data.get("followersNumber", 0), data.get("interestedInAdNumber", 0)
+        except Exception:
+            if attempt == 0:
+                time.sleep(1)
+    return 0, 0
 
 
 def fetch_search_page(build_id, params, page):
@@ -93,15 +113,6 @@ def fetch_search_page(build_id, params, page):
     return results, page_count, total_items
 
 
-def value_score(listing):
-    current_year = 2026
-    age = max(1, current_year - listing["year"])
-    km = max(1, listing["mileage"])
-    price = listing["price"]
-    hp = max(1, listing["hp"])
-    return (hp / price) * (1 / age) * (100000 / km)
-
-
 def collect_category(key, cat, build_id, max_pages=3):
     print(f"📂 {cat['title']}...")
     all_listings = {}
@@ -127,10 +138,17 @@ def collect_category(key, cat, build_id, max_pages=3):
             break
         time.sleep(1)
 
+    print(f"   📊 Fetching engagement for {len(all_listings)} ads...")
+    for ad_id, lst in all_listings.items():
+        followers, interested = fetch_engagement(ad_id)
+        lst["followers"] = followers
+        lst["interested"] = interested
+
     valid = list(all_listings.values())
-    valid.sort(key=value_score, reverse=True)
+    valid.sort(key=lambda x: (x["followers"] + x["interested"], x["followers"]), reverse=True)
     top = valid[:10]
-    print(f"   ✅ {len(valid)} valid, top10 ready")
+    engaged = sum(1 for v in valid if v["followers"] > 0 or v["interested"] > 0)
+    print(f"   ✅ {len(valid)} valid, {engaged} with engagement, top10 ready")
     return key, cat["title"], top, len(valid)
 
 
@@ -144,7 +162,7 @@ def generate_html(data, updated):
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>BG Auto Deals - Top 10</title>
 <meta property="og:title" content="BG Auto Deals - Top 10">
-<meta property="og:description" content="Najbolji polovni auti po kategorijama - automatski ažurirano">
+<meta property="og:description" content="Najtraženiji polovni auti po kategorijama - automatski ažurirano">
 <style>
   *{{box-sizing:border-box}}
   body{{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
@@ -173,6 +191,9 @@ def generate_html(data, updated):
              background-color:#22272e;position:relative}}
   .rank{{position:absolute;top:10px;left:10px;background:#1d9bf0;color:#fff;
          font-weight:700;padding:4px 10px;border-radius:999px;font-size:0.85em}}
+  .engage{{position:absolute;top:10px;right:10px;display:flex;gap:4px}}
+  .engage span{{background:rgba(0,0,0,.7);color:#fff;padding:3px 8px;border-radius:999px;
+                font-size:0.8em;backdrop-filter:blur(4px)}}
   .card-body{{padding:12px}}
   .title{{font-weight:600;font-size:0.95em;margin-bottom:8px;
           display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
@@ -189,7 +210,7 @@ def generate_html(data, updated):
 <body>
 <header>
   <h1>🚗 BG Auto Deals</h1>
-  <div class="sub">Top 10 po vrednosti (KS/€/god/km) · Ažurirano: <b>{updated}</b></div>
+  <div class="sub">Top 10 najtraženijih (💛 pratioci + 🤝 zainteresovani) · Ažurirano: <b>{updated}</b></div>
 </header>
 <div class="container">
   <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:20px">
@@ -201,7 +222,7 @@ def generate_html(data, updated):
 </div>
 <footer>
   Podaci sa <a href="https://www.polovniautomobili.com" target="_blank">polovniautomobili.com</a> ·
-  Rangirano po vrednosti (KS/€ × novije × manja km) ·
+  Rangirano po interesovanju (💛 pratioci + 🤝 zainteresovani za kupovinu) ·
   <a href="data.json">data.json</a>
 </footer>
 <script>
@@ -230,9 +251,14 @@ function renderGrid() {{
   el.innerHTML = cat.top.map((r,i) => {{
     const img = r.img || '';
     const imgStyle = img ? "background-image:url('"+img+"')" : "";
+    const badges = [];
+    if (r.followers > 0) badges.push('<span>💛 '+r.followers+'</span>');
+    if (r.interested > 0) badges.push('<span>🤝 '+r.interested+'</span>');
     return '<a class="card" href="'+r.url+'" target="_blank" rel="noopener">'
       +'<div class="card-img" style="'+imgStyle+'">'
-      +'<span class="rank">#'+(i+1)+'</span></div>'
+      +'<span class="rank">#'+(i+1)+'</span>'
+      +(badges.length ? '<div class="engage">'+badges.join('')+'</div>' : '')
+      +'</div>'
       +'<div class="card-body"><div class="title">'+esc(r.title)+'</div>'
       +'<div class="meta"><span class="price">'+r.price+'€</span>'
       +(r.year ? '<span class="stat">📅 '+r.year+'</span>' : '')
@@ -301,8 +327,11 @@ async def main():
         data["categories"][key] = {"title": title, "top": top10, "total": total}
         msg_parts.append(f"\n*{title}* _({total} oglasa)_")
         for i, r in enumerate(top10, 1):
+            eng = ""
+            if r["followers"] > 0 or r["interested"] > 0:
+                eng = f" 💛{r['followers']} 🤝{r['interested']}"
             msg_parts.append(
-                f"{i}. 💶{r['price']}€ 📅{r['year']} 🛣️{r['mileage']}km\n"
+                f"{i}. 💶{r['price']}€ 📅{r['year']} 🛣️{r['mileage']}km{eng}\n"
                 f"   {r['title']}\n   {r['url']}"
             )
 

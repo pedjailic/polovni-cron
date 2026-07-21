@@ -109,6 +109,7 @@ def fetch_search_page(build_id, params, page):
             "hp": item.get("horsePower", 0),
             "city": item.get("city", ""),
             "img": item.get("imageMain", ""),
+            "indexedAt": item.get("indexedAt", ""),
         })
     return results, page_count, total_items
 
@@ -147,9 +148,12 @@ def collect_category(key, cat, build_id, max_pages=3):
     valid = list(all_listings.values())
     valid.sort(key=lambda x: (x["followers"] + x["interested"] * 3, x["followers"]), reverse=True)
     top = valid[:10]
+
+    newest = sorted(valid, key=lambda x: x.get("indexedAt", ""), reverse=True)[:10]
+
     engaged = sum(1 for v in valid if v["followers"] > 0 or v["interested"] > 0)
     print(f"   ✅ {len(valid)} valid, {engaged} with engagement, top10 ready")
-    return key, cat["title"], top, len(valid)
+    return key, cat["title"], top, newest, len(valid)
 
 
 def generate_html(data, updated):
@@ -219,6 +223,8 @@ def generate_html(data, updated):
     <button class="refresh" onclick="location.reload()">🔄 Osveži</button>
   </div>
   <div class="grid" id="grid"></div>
+  <h2 style="margin-top:40px;font-size:1.3em;border-top:1px solid #2f3336;padding-top:24px">🆕 Najnoviji oglasi</h2>
+  <div class="grid" id="newest-grid"></div>
 </div>
 <footer>
   Podaci sa <a href="https://www.polovniautomobili.com" target="_blank">polovniautomobili.com</a> ·
@@ -241,6 +247,29 @@ function renderTabs() {{
   ).join('');
 }}
 
+function renderCard(r, i, showDate) {{
+  const img = r.img || '';
+  const imgStyle = img ? "background-image:url('"+img+"')" : "";
+  const badges = [];
+  if (r.followers > 0) badges.push('<span>💛 '+r.followers+'</span>');
+  if (r.interested > 0) badges.push('<span>🤝 '+r.interested+'</span>');
+  const dateBadge = showDate && r.indexedAt
+    ? '<span class="stat">🕐 '+r.indexedAt.slice(0,10)+'</span>' : '';
+  return '<a class="card" href="'+r.url+'" target="_blank" rel="noopener">'
+    +'<div class="card-img" style="'+imgStyle+'">'
+    +'<span class="rank">#'+(i+1)+'</span>'
+    +(badges.length ? '<div class="engage">'+badges.join('')+'</div>' : '')
+    +'</div>'
+    +'<div class="card-body"><div class="title">'+esc(r.title)+'</div>'
+    +'<div class="meta"><span class="price">'+r.price+'€</span>'
+    +dateBadge
+    +(r.year ? '<span class="stat">📅 '+r.year+'</span>' : '')
+    +(r.mileage ? '<span class="stat">🛣️ '+fmtKm(r.mileage)+'</span>' : '')
+    +(r.hp ? '<span class="stat">🐴 '+r.hp+' KS</span>' : '')
+    +(r.fuel ? '<span class="stat">⛽ '+esc(r.fuel)+'</span>' : '')
+    +'</div></div></a>';
+}}
+
 function renderGrid() {{
   const cat = DATA.categories[activeTab];
   const el = document.getElementById('grid');
@@ -248,25 +277,17 @@ function renderGrid() {{
     el.innerHTML = '<p class="empty">Nema rezultata za ovu kategoriju.</p>';
     return;
   }}
-  el.innerHTML = cat.top.map((r,i) => {{
-    const img = r.img || '';
-    const imgStyle = img ? "background-image:url('"+img+"')" : "";
-    const badges = [];
-    if (r.followers > 0) badges.push('<span>💛 '+r.followers+'</span>');
-    if (r.interested > 0) badges.push('<span>🤝 '+r.interested+'</span>');
-    return '<a class="card" href="'+r.url+'" target="_blank" rel="noopener">'
-      +'<div class="card-img" style="'+imgStyle+'">'
-      +'<span class="rank">#'+(i+1)+'</span>'
-      +(badges.length ? '<div class="engage">'+badges.join('')+'</div>' : '')
-      +'</div>'
-      +'<div class="card-body"><div class="title">'+esc(r.title)+'</div>'
-      +'<div class="meta"><span class="price">'+r.price+'€</span>'
-      +(r.year ? '<span class="stat">📅 '+r.year+'</span>' : '')
-      +(r.mileage ? '<span class="stat">🛣️ '+fmtKm(r.mileage)+'</span>' : '')
-      +(r.hp ? '<span class="stat">🐴 '+r.hp+' KS</span>' : '')
-      +(r.fuel ? '<span class="stat">⛽ '+esc(r.fuel)+'</span>' : '')
-      +'</div></div></a>';
-  }}).join('');
+  el.innerHTML = cat.top.map((r,i) => renderCard(r, i, false)).join('');
+}}
+
+function renderNewest() {{
+  const cat = DATA.categories[activeTab];
+  const el = document.getElementById('newest-grid');
+  if (!cat.newest || !cat.newest.length) {{
+    el.innerHTML = '<p class="empty">Nema najnovijih rezultata.</p>';
+    return;
+  }}
+  el.innerHTML = cat.newest.map((r,i) => renderCard(r, i, true)).join('');
 }}
 
 document.getElementById('tabs').addEventListener('click', e => {{
@@ -275,10 +296,12 @@ document.getElementById('tabs').addEventListener('click', e => {{
   activeTab = btn.dataset.tab;
   renderTabs();
   renderGrid();
+  renderNewest();
 }});
 
 renderTabs();
 renderGrid();
+renderNewest();
 </script>
 </body>
 </html>"""
@@ -313,7 +336,7 @@ async def main():
         results.append(result)
         time.sleep(2)
 
-    total_listings = sum(r[3] for r in results)
+    total_listings = sum(r[4] for r in results)
     if total_listings == 0:
         print("⚠️  0 rezultata ukupno — sajt možda u remontu, preskačem deploy")
         return
@@ -323,8 +346,8 @@ async def main():
     data = {"updated": updated, "categories": {}}
     msg_parts = [f"🚗 *BG Auto Deals - {updated}*"]
 
-    for key, title, top10, total in results:
-        data["categories"][key] = {"title": title, "top": top10, "total": total}
+    for key, title, top10, newest10, total in results:
+        data["categories"][key] = {"title": title, "top": top10, "newest": newest10, "total": total}
         msg_parts.append(f"\n*{title}* _({total} oglasa)_")
         for i, r in enumerate(top10, 1):
             eng = ""

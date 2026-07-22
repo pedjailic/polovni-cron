@@ -149,7 +149,9 @@ def collect_category(key, cat, build_id, max_pages=3):
     valid.sort(key=lambda x: (x["followers"] + x["interested"] * 3, x["followers"]), reverse=True)
     top = valid[:10]
 
-    newest = sorted(valid, key=lambda x: x.get("indexedAt", ""), reverse=True)[:10]
+    newest = sorted(valid, key=lambda x: x.get("indexedAt", ""), reverse=True)[:30]
+    newest.sort(key=lambda x: (x["followers"] + x["interested"] * 3, x["followers"]), reverse=True)
+    newest = newest[:10]
 
     engaged = sum(1 for v in valid if v["followers"] > 0 or v["interested"] > 0)
     print(f"   ✅ {len(valid)} valid, {engaged} with engagement, top10 ready")
